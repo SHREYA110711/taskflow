@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -43,6 +42,8 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	dashboardHandler := handler.NewDashboardHandler()
+
 	// REST API Routes
 	mux.HandleFunc("/api/v1/jobs", jobHandler.ServeHTTP)
 	mux.HandleFunc("/api/v1/jobs/", jobHandler.ServeHTTP)
@@ -70,14 +71,14 @@ func main() {
 		})
 	})
 
-	// Root Route
+	// Monitoring Dashboard Routes
+	mux.HandleFunc("/dashboard", dashboardHandler.ServeHTTP)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain")
-		fmt.Fprintln(w, "TaskFlow Distributed Job Queue API is running.\nEndpoints: /api/v1/jobs, /api/v1/stats, /health")
+		dashboardHandler.ServeHTTP(w, r)
 	})
 
 	// Wrap mux with middleware chain: Recovery -> CORS -> Logger -> Mux
