@@ -1,12 +1,12 @@
-# Binaries and build artifacts
-bin/
-*.exe
-*.dll
-*.so
-*.dylib
-taskflow
-api
-worker
+# Binaries and build artifacts (anchored with leading slash so directories like internal/worker are not ignored)
+/bin/
+/*.exe
+/*.dll
+/*.so
+/*.dylib
+/taskflow
+/api
+/worker
 
 # Environment configuration (Contains sensitive credentials)
 .env
