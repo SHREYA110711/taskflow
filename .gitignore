@@ -1,0 +1,21 @@
+# Binaries and build artifacts
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+taskflow
+api
+worker
+
+# Environment configuration (Contains sensitive credentials)
+.env
+.env.local
+.env.*.local
+
+# Operating System & Editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
