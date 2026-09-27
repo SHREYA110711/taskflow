@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # 1. PostgreSQL Database (Durable State & Audit Logs)
+  postgres:
+    image: postgres:15-alpine
+    container_name: taskflow-postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_DB: taskflow
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d taskflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis In-Memory Broker (Priority Queues, Delayed ZSET, DLQ)
+  redis:
+    image: redis:7-alpine
+    container_name: taskflow-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # 3. TaskFlow REST API & Web Dashboard
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: api
+    container_name: taskflow-api
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DATABASE_URL: "postgres://postgres:postgrespassword@postgres:5432/taskflow?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      WORKER_CONCURRENCY: "5"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # 4. TaskFlow Distributed Background Worker
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE: worker
+    container_name: taskflow-worker
+    restart: always
+    environment:
+      DATABASE_URL: "postgres://postgres:postgrespassword@postgres:5432/taskflow?sslmode=disable"
+      REDIS_ADDR: "redis:6379"
+      WORKER_CONCURRENCY: "5"
+      DEFAULT_MAX_RETRIES: "3"
+      DEFAULT_RETRY_DELAY_SECONDS: "10"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:
