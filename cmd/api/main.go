@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,60 +9,94 @@ import (
 
 	"github.com/SHREYA110711/taskflow/internal/config"
 	"github.com/SHREYA110711/taskflow/internal/handler"
-	"github.com/SHREYA110711/taskflow/internal/model"
+	"github.com/SHREYA110711/taskflow/internal/queue"
 	"github.com/SHREYA110711/taskflow/internal/repository"
 )
 
 func main() {
 	cfg := config.Load()
 
-	log.Printf("Starting TaskFlow API on port :%s...", cfg.Port)
+	log.Println("==================================================")
+	log.Println("         TaskFlow Distributed API Server          ")
+	log.Println("==================================================")
+	log.Printf("Connecting to PostgreSQL...")
 
 	db, err := repository.NewPostgresDB(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("Database connection failed: %v", err)
+		log.Fatalf("PostgreSQL connection failed: %v", err)
 	}
 	defer db.Close()
+	log.Println("✅ Connected to PostgreSQL & ran schema auto-migrations")
 
-	log.Println("✅ Successfully connected to PostgreSQL & ran schema migrations")
+	log.Printf("Connecting to Redis Broker at %s...", cfg.RedisAddr)
+	broker, err := queue.NewRedisBroker(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+	if err != nil {
+		log.Printf("⚠️ Warning: Redis connection failed (%v). API running in DB-only mode.", err)
+	} else {
+		defer broker.Close()
+		log.Println("✅ Connected to Redis Broker")
+	}
 
-	jobRepository := repository.NewJobRepository(db)
-	jobHandler := handler.NewJobHandler(jobRepository)
+	jobRepo := repository.NewJobRepository(db)
+	jobHandler := handler.NewJobHandler(jobRepo, broker)
+	statsHandler := handler.NewStatsHandler(jobRepo, broker)
 
-	http.HandleFunc("/jobs", jobHandler.CreateJob)
+	mux := http.NewServeMux()
 
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	// REST API Routes
+	mux.HandleFunc("/api/v1/jobs", jobHandler.ServeHTTP)
+	mux.HandleFunc("/api/v1/jobs/", jobHandler.ServeHTTP)
+	mux.HandleFunc("/api/v1/stats", statsHandler.GetStats)
+
+	// Health Check Route
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"status": "healthy",
-			"time":   time.Now().UTC().Format(time.RFC3339),
+		dbErr := db.PingContext(r.Context())
+		redisStatus := "connected"
+		if broker == nil || broker.Ping(r.Context()) != nil {
+			redisStatus = "unavailable"
+		}
+
+		dbStatus := "connected"
+		if dbErr != nil {
+			dbStatus = "unavailable"
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":   "healthy",
+			"database": dbStatus,
+			"redis":    redisStatus,
+			"time":     time.Now().UTC().Format(time.RFC3339),
 		})
 	})
 
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, "TaskFlow Distributed Job Queue API is running")
+	// Root Route
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		fmt.Fprintln(w, "TaskFlow Distributed Job Queue API is running.\nEndpoints: /api/v1/jobs, /api/v1/stats, /health")
 	})
 
-	// Sample test job creation
-	testJob := model.Job{
-		ID:        fmt.Sprintf("job_%d", time.Now().Unix()),
-		Type:      "send_email",
-		Payload:   json.RawMessage(`{"to":"interview@taskflow.dev","subject":"Welcome to TaskFlow"}`),
-		Status:    model.StatusPending,
-		Priority:  model.PriorityDefault,
-		Attempts:  0,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+	// Wrap mux with middleware chain: Recovery -> CORS -> Logger -> Mux
+	handlerChain := handler.RecoveryMiddleware(
+		handler.CORSMiddleware(
+			handler.LoggerMiddleware(mux),
+		),
+	)
+
+	server := &http.Server{
+		Addr:         ":" + cfg.Port,
+		Handler:      handlerChain,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
-	if err := jobRepository.Create(context.Background(), testJob); err != nil {
-		log.Printf("⚠️ Note: test job creation returned: %v", err)
-	} else {
-		log.Printf("🚀 Test job created successfully with ID: %s", testJob.ID)
-	}
-
-	log.Printf("TaskFlow HTTP server listening on http://localhost:%s", cfg.Port)
-	if err := http.ListenAndServe(":"+cfg.Port, nil); err != nil {
+	log.Printf("🚀 TaskFlow API listening on http://localhost:%s", cfg.Port)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("Server stopped unexpectedly: %v", err)
 	}
 }

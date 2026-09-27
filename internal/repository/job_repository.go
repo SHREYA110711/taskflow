@@ -16,6 +16,22 @@ var (
 	ErrJobNotFound = errors.New("job not found")
 )
 
+// JobRepositoryInterface defines repository operations for jobs and logs.
+type JobRepositoryInterface interface {
+	Create(ctx context.Context, job model.Job) error
+	GetByID(ctx context.Context, id string) (*model.Job, error)
+	MarkProcessing(ctx context.Context, id string, workerID string, timeoutSeconds int) error
+	MarkCompleted(ctx context.Context, id string, result json.RawMessage) error
+	MarkFailed(ctx context.Context, id string, errMsg string, willRetry bool, nextRunAt time.Time) error
+	ResetForRetry(ctx context.Context, id string) error
+	MarkCancelled(ctx context.Context, id string) error
+	List(ctx context.Context, filter model.JobFilter) ([]model.Job, int64, error)
+	GetStats(ctx context.Context) (*model.JobStats, error)
+	CreateLog(ctx context.Context, log model.JobLog) error
+	GetLogsByJobID(ctx context.Context, jobID string) ([]model.JobLog, error)
+	Delete(ctx context.Context, id string) error
+}
+
 type JobRepository struct {
 	db *sql.DB
 }
